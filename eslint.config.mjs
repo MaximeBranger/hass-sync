@@ -8,6 +8,10 @@ export default [
     ignores: ['dist/**', 'node_modules/**', 'shared/es6-promise.js'],
   },
   {
+    files: ['scripts/**/*.mjs'],
+    languageOptions: { ecmaVersion: 2022, sourceType: 'module', globals: globals.node },
+  },
+  {
     files: ['**/*.js'],
     languageOptions: {
       ecmaVersion: 2022,
