@@ -1,7 +1,7 @@
 name: CI
 
 env:
-  ARTIFACT_NAME: "zepp-hass-sync"
+  ARTIFACT_NAME: "hass-sync"
 
 on:
   push:

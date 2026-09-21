@@ -2,15 +2,15 @@
   "configVersion": "v3",
   "app": {
     "appId": 1120685,
-    "appName": "zepp-hass-sync",
+    "appName": "Hass Sync",
     "appType": "app",
     "version": {
-      "code": 1,
-      "name": "1.3.0"
+      "code": 2,
+      "name": "1.3.1"
     },
     "icon": "icon.png",
     "vender": "zepp",
-    "description": "Sends Zepp OS health data to Home Assistant via the zepp2hass webhook"
+    "description": "Sends health data from your Zepp OS watch to Home Assistant via a webhook. Not affiliated with or endorsed by Zepp Health or Home Assistant. Feedback & Support: if you encounter any issues or have suggestions, please contact me at contact@maximebranger.fr."
   },
   "permissions": [
     "device:os.local_storage",

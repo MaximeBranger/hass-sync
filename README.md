@@ -1,6 +1,8 @@
-# zepp-hass-sync
+# Hass Sync
 
-<img src="assets/default.b/icon.png" alt="zepp-hass-sync logo" width="200"/>
+> Formerly published as **zepp-hass-sync**. Renamed in 1.3.1 after the Zepp Store rejected a name containing a registered trademark.
+
+<img src="assets/default.b/icon.png" alt="Hass Sync logo" width="200"/>
 
 A Zepp OS watch app that pushes health/fitness data to
 [zepp2hass](https://github.com/davidepalleschi/zepp2hass), a Home Assistant custom
@@ -8,7 +10,7 @@ integration, via its webhook.
 
 [zepp2hass](https://github.com/davidepalleschi/zepp2hass) ships its own companion
 Zepp Store watch app to feed it data, but that app currently crashes on launch, its
-source isn't public, and the issue has never been fixed. zepp-hass-sync is an
+source isn't public, and the issue has never been fixed. Hass Sync is an
 independent, open-source replacement for that watch app, built to send the same
 webhook payload shape so it drops in as a working substitute.
 
@@ -101,3 +103,9 @@ npm run lint # eslint
 ```
 
 See [CONTRIBUTING.md](CONTRIBUTING.md).
+
+## Feedback & Support
+
+If you encounter any issues or have suggestions, please contact me at contact@maximebranger.fr or open a GitHub issue.
+
+_Hass Sync is an independent project, not affiliated with or endorsed by Zepp Health or Home Assistant._

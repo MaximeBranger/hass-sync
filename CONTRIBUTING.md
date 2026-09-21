@@ -1,6 +1,6 @@
 # Contributing
 
-zepp-hass-sync is a small, independent replacement for the zepp2hass Zepp Store
+Hass Sync (formerly zepp-hass-sync) is a small, independent replacement for the zepp2hass Zepp Store
 app. Contributions are welcome, especially around sensor coverage, payload
 compatibility with zepp2hass, and testing on devices other than the GTR 4.
 

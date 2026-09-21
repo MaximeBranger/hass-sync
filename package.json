@@ -1,6 +1,6 @@
 {
-  "name": "zepp-hass-sync",
-  "version": "1.3.0",
+  "name": "hass-sync",
+  "version": "1.3.1",
   "description": "Zepp OS watch app that pushes health/fitness data to Home Assistant via the zepp2hass webhook",
   "main": "app.js",
   "scripts": {
