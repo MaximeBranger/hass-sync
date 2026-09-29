@@ -5,13 +5,16 @@
 import '../shared/device-polyfill'
 import { MessageBuilder, MessagePayloadDataTypeOp, MessagePayloadType } from '../shared/message'
 import { exit } from '@zos/app-service'
-import { armNextAlarm } from '../shared/alarm'
+import { armNextAlarm, repairAlarmChain } from '../shared/alarm'
 import { getPackageInfo } from '@zos/app'
 import { log as Logger } from '@zos/utils'
 import * as ble from '@zos/ble'
 import { readFileSync, writeFileSync } from '@zos/fs'
 import { readSensors } from './sensors'
 import {
+  DEFAULT_INTERVAL_MINUTES,
+  MIN_INTERVAL_MINUTES,
+  MAX_INTERVAL_MINUTES,
   MESSAGE_METHOD_SERVICE_REPORT,
   MESSAGE_METHOD_SEND,
   MESSAGE_SOURCE_SERVICE,
@@ -30,6 +33,14 @@ import {
 const MAX_DETAIL_CHARS = 120
 
 const logger = Logger.getLogger('hass-sync-service')
+
+// Extra breadcrumb fields used only by the recovery watchdog. They intentionally stay local to this
+// file so the upstream-facing change does not expand the public constants surface just for
+// diagnostics.
+const TRACE_INTERVAL_KEY = 'interval'
+const TRACE_ALARM_FAILURES_KEY = 'alarmFailures'
+const TRACE_RECOVERIES_KEY = 'recoveries'
+const TRACE_LAST_EVENT_KEY = 'lastEvent'
 
 // ---------------------------------------------------------------------------
 // One send per run. The alarm is the clock.
@@ -103,34 +114,110 @@ function describeError(error) {
   return (error && error.message) || String(error)
 }
 
+function readTraceStore() {
+  try {
+    const raw = readFileSync({ path: SERVICE_TRACE_STORE, options: { encoding: 'utf8' } })
+    return typeof raw === 'string' && raw !== '' ? JSON.parse(raw) : {}
+  } catch {
+    return {}
+  }
+}
+
+function writeTraceStore(store) {
+  try {
+    writeFileSync({ path: SERVICE_TRACE_STORE, data: JSON.stringify(store), options: { encoding: 'utf8' } })
+    return true
+  } catch {
+    return false
+  }
+}
+
 // The breadcrumb, and the only thing this service records on the watch itself. See
 // SERVICE_TRACE_STORE for why it exists and what its two counters separate.
 //
 // Only alarm-woken runs are counted. A run the app started is not evidence of anything — the app
 // being open is the condition this whole mechanism exists to work without — and counting those too
 // would bury the signal under noise from every diagnostic check.
-//
-// Note what this contradicts: the header below says no storage has ever been observed to work in
-// this VM, which was true of `@zos/storage` and was assumed of `@zos/fs`. The assumption was wrong.
-// `@zos/fs` has now been seen writing from an alarm-woken App Service on a GTR 4, which is what
-// makes any of this measurable. It stays wrapped in try/catch and off every load-bearing path all
-// the same.
 function trace(trigger, patch) {
   if (!isUnattendedTrigger(trigger)) return
   try {
-    const raw = readFileSync({ path: SERVICE_TRACE_STORE, options: { encoding: 'utf8' } })
-    const previous = typeof raw === 'string' && raw !== '' ? JSON.parse(raw) : {}
+    const previous = readTraceStore()
     const next = {
+      ...previous,
       [STATE_KEY_WD_RUNS]: previous[STATE_KEY_WD_RUNS] || 0,
       [STATE_KEY_WD_DONE]: previous[STATE_KEY_WD_DONE] || 0,
       [STATE_KEY_WD_LAST]: previous[STATE_KEY_WD_LAST] || '',
+      [TRACE_INTERVAL_KEY]: previous[TRACE_INTERVAL_KEY] || DEFAULT_INTERVAL_MINUTES,
+      [TRACE_ALARM_FAILURES_KEY]: previous[TRACE_ALARM_FAILURES_KEY] || 0,
+      [TRACE_RECOVERIES_KEY]: previous[TRACE_RECOVERIES_KEY] || 0,
+      [TRACE_LAST_EVENT_KEY]: previous[TRACE_LAST_EVENT_KEY] || '',
     }
     if (patch.run) next[STATE_KEY_WD_RUNS] += 1
     if (patch.done) next[STATE_KEY_WD_DONE] += 1
     if (patch.last) next[STATE_KEY_WD_LAST] = String(patch.last).slice(0, 24)
-    writeFileSync({ path: SERVICE_TRACE_STORE, data: JSON.stringify(next), options: { encoding: 'utf8' } })
+    if (Number.isFinite(patch.intervalMinutes)) next[TRACE_INTERVAL_KEY] = patch.intervalMinutes
+    if (patch.alarmFailed) next[TRACE_ALARM_FAILURES_KEY] += 1
+    writeTraceStore(next)
   } catch {
     // A service that cannot write its own breadcrumb must still send.
+  }
+}
+
+function normaliseEventParam(param) {
+  if (typeof param === 'string') return param
+  try {
+    return JSON.stringify(param)
+  } catch {
+    return String(param || '')
+  }
+}
+
+function isSystemEventParam(param) {
+  return normaliseEventParam(param).indexOf('event:os.') !== -1
+}
+
+function getSystemEventName(param) {
+  const text = normaliseEventParam(param)
+  const match = text.match(/(?:^|&)event=(event:os\.[^&]+)/)
+  if (match && match[1]) return match[1]
+  const directIndex = text.indexOf('event:os.')
+  if (directIndex !== -1) {
+    const direct = text.slice(directIndex)
+    const end = direct.indexOf('&')
+    return (end === -1 ? direct : direct.slice(0, end)).slice(0, 80)
+  }
+  return text.slice(0, 80)
+}
+
+function readLastKnownInterval() {
+  try {
+    const store = readTraceStore()
+    const value = Number(store[TRACE_INTERVAL_KEY])
+    if (Number.isFinite(value) && value >= MIN_INTERVAL_MINUTES && value <= MAX_INTERVAL_MINUTES) {
+      return value
+    }
+  } catch {
+    // Fall back to the default below.
+  }
+  return DEFAULT_INTERVAL_MINUTES
+}
+
+function recordSystemEventRecovery(eventName, intervalMinutes, result) {
+  try {
+    const previous = readTraceStore()
+    const next = {
+      ...previous,
+      [TRACE_INTERVAL_KEY]: intervalMinutes,
+      [TRACE_RECOVERIES_KEY]: (previous[TRACE_RECOVERIES_KEY] || 0) + 1,
+      [TRACE_LAST_EVENT_KEY]: String(eventName || 'unknown').slice(0, 80),
+      [STATE_KEY_WD_LAST]: result.id > 0 ? 'recovered' : 'recovery-alarm-failed',
+    }
+    if (!result.id) {
+      next[TRACE_ALARM_FAILURES_KEY] = (previous[TRACE_ALARM_FAILURES_KEY] || 0) + 1
+    }
+    writeTraceStore(next)
+  } catch {
+    // Recovery must not depend on diagnostics.
   }
 }
 
@@ -162,7 +249,33 @@ function withTimeout(promise, ms, message) {
 
 AppService({
   onInit(param) {
-    logger.log('app-service onInit, param=' + param)
+    logger.log('app-service onInit, param=' + normaliseEventParam(param))
+
+    // System Events are used only as a watchdog. They never send health data; they rebuild the
+    // one-shot alarm chain and exit immediately. On the Balance 2 this gives a dead alarm chain a
+    // chance to recover without requiring the user to reopen the app.
+    if (isSystemEventParam(param)) {
+      const eventName = getSystemEventName(param)
+      const intervalMinutes = readLastKnownInterval()
+      logger.log('system-event watchdog: ' + eventName + ', interval=' + intervalMinutes)
+
+      let result
+      try {
+        result = repairAlarmChain(intervalMinutes)
+      } catch (error) {
+        logger.error('repairAlarmChain failed: ' + describeError(error))
+        result = { id: 0, cancelled: 0 }
+      }
+
+      recordSystemEventRecovery(eventName, intervalMinutes, result)
+
+      try {
+        exit()
+      } catch (error) {
+        logger.error('system-event exit failed: ' + describeError(error))
+      }
+      return
+    }
 
     // The trigger says what woke this run; the interval is the pace to arm the next alarm at, which
     // is the only reason this run needs to know it.
@@ -184,17 +297,20 @@ AppService({
     // Only for alarm-woken runs. A run the app started must not arm anything: the page has just
     // swept and armed, and adding another here would double up on every open.
     if (isUnattendedTrigger(this.trigger)) {
+      let nextAlarmId = 0
       try {
-        armNextAlarm(intervalMinutes)
+        nextAlarmId = armNextAlarm(intervalMinutes)
       } catch (error) {
         logger.error('armNextAlarm failed: ' + describeError(error))
       }
+      if (!nextAlarmId) logger.error('armNextAlarm returned 0 after retry')
+      trace(this.trigger, { intervalMinutes, alarmFailed: !nextAlarmId })
     }
 
     // Then the breadcrumb, so that `runs` records the wake-up itself rather than a run that got
     // somewhere. If the system kills this execution at 600ms, this line has already landed and the
     // pair `runs` climbing / `done` frozen is the answer.
-    trace(this.trigger, { run: true })
+    trace(this.trigger, { run: true, intervalMinutes })
 
     this.runSend()
   },

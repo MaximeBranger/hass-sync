@@ -20,8 +20,8 @@
 // no configuration to get wrong. Each run arms the next one before it does anything else, so the
 // chain continues even if the run is cut short — see app-service/index.js's onInit.
 //
-// The chain's one weakness is that a run which never happens ends it. Opening the app re-arms, which
-// is the same recovery every other failure here has.
+// The chain's one weakness is that a run which never happens ends it. Opening the app re-arms it,
+// and system-event recovery can repair it while the app is closed.
 import { REPEAT_ONCE, cancel, getAllAlarms, set } from '@zos/alarm'
 import { APP_SERVICE_FILE, SERVICE_TRIGGER_ALARM, encodeServiceParam } from './constants'
 
@@ -49,6 +49,22 @@ export function cancelAllAlarms() {
   return cancelled
 }
 
+function createAlarm(intervalMinutes) {
+  try {
+    const id = set({
+      url: APP_SERVICE_FILE,
+      // Reaches the service as onInit's argument: what woke this run, and the pace to keep arming.
+      param: encodeServiceParam(SERVICE_TRIGGER_ALARM, intervalMinutes),
+      delay: intervalMinutes * 60,
+      repeat_type: REPEAT_ONCE,
+      store: true,
+    })
+    return typeof id === 'number' ? id : 0
+  } catch {
+    return 0
+  }
+}
+
 // Arms the next wake-up, `intervalMinutes` from now. Returns its id, or 0 if the API refused.
 //
 // Deliberately does not sweep: this is what the *service* calls, in a context where every extra API
@@ -57,19 +73,13 @@ export function cancelAllAlarms() {
 //
 // `store: true` so it survives a reboot. Without it the chain would break the first time the watch
 // restarted, and only reopening the app would restore it.
+//
+// Balance 2 testing showed occasional alarm creation failures. One immediate retry keeps a transient
+// `set()` failure from silently ending the entire one-shot chain.
 export function armNextAlarm(intervalMinutes) {
-  try {
-    return set({
-      url: APP_SERVICE_FILE,
-      // Reaches the service as onInit's argument: what woke this run, and the pace to keep arming.
-      param: encodeServiceParam(SERVICE_TRIGGER_ALARM, intervalMinutes),
-      delay: intervalMinutes * 60,
-      repeat_type: REPEAT_ONCE,
-      store: true,
-    })
-  } catch {
-    return 0
-  }
+  let id = createAlarm(intervalMinutes)
+  if (id > 0) return id
+  return createAlarm(intervalMinutes)
 }
 
 // The page's version: sweep first, then arm. Returns `{ id, cancelled }` — the new alarm's id and
@@ -79,6 +89,14 @@ export function armNextAlarm(intervalMinutes) {
 // the calls and the one that needs to heal an accumulated backlog; the service only ever adds the
 // single alarm that replaces the one it consumed.
 export function scheduleSendAlarm(intervalMinutes) {
+  const cancelled = cancelAllAlarms()
+  return { id: armNextAlarm(intervalMinutes), cancelled }
+}
+
+// System-event watchdog recovery uses the same sweep-and-arm operation as the page, but without
+// needing the page to be opened. This is intentionally separate from armNextAlarm(): recovery runs
+// are allowed to remove stale alarms before rebuilding the chain.
+export function repairAlarmChain(intervalMinutes) {
   const cancelled = cancelAllAlarms()
   return { id: armNextAlarm(intervalMinutes), cancelled }
 }

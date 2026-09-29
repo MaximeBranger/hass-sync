@@ -16,6 +16,8 @@
     "device:os.local_storage",
     "device:os.bg_service",
     "device:os.alarm",
+    "event:os.system.sleep_mode",
+    "event:os.health.wear_status",
     "data:os.device.info",
     "data:user.info",
     "data:user.hd.step",
